@@ -5,7 +5,7 @@ import io
 
 app = FastAPI()
 
-# Load the YOLO model
+# Load YOLO model
 model = YOLO("best.pt")
 
 @app.post("/predict")
@@ -15,7 +15,6 @@ async def predict(image: UploadFile = File(...)):
 
     results = model(img)
 
-    predictions = []
     asymmetry_list = []
 
     for result in results:
@@ -24,25 +23,21 @@ async def predict(image: UploadFile = File(...)):
             width = x2 - x1
             height = y2 - y1
 
-            # Calculate asymmetry percentage
-            asym = abs(width - height) / max(width, height) * 100 if max(width, height) > 0 else 0
+            # calculate asymmetry
+            asym = abs(width - height) / max(width, height) * 100 if max(width, height) else 0
             asymmetry_list.append(asym)
 
-            predictions.append({
-                "class": result.names[int(box.cls[0])],
-                "confidence": float(box.conf[0]),
-                "bbox": [float(x1), float(y1), float(x2), float(y2)],
-                "asymmetry_percentage": round(asym, 2)
-            })
-
+    # Overall asymmetry
     avg_asymmetry = round(sum(asymmetry_list) / len(asymmetry_list), 2) if asymmetry_list else 0
 
-    return {
-        "predictions": predictions,
-        "count": len(predictions),
-        "average_asymmetry_percentage": avg_asymmetry
-    }
+    # Classification threshold
+    THRESHOLD = 10  # adjust as needed
+
+    if avg_asymmetry > THRESHOLD:
+        return "DEFORMED"
+    else:
+        return "NORMAL"
 
 @app.get("/")
 def home():
-    return {"status": "YOLO asymmetry API is running!"}
+    return "YOLO asymmetry API is running!"
