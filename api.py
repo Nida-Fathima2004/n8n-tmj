@@ -1,20 +1,31 @@
-from fastapi import FastAPI, UploadFile, File
+import streamlit as st
 from ultralytics import YOLO
 from PIL import Image
 import io
+import threading
+from fastapi import FastAPI, UploadFile, File
+import uvicorn
+import tempfile
 
-app = FastAPI()
-
-# Load YOLO model
+# -----------------------------
+# Load YOLO Model
+# -----------------------------
 model = YOLO("best.pt")
 
-@app.post("/predict")
-async def predict(image: UploadFile = File(...)):
+# -----------------------------
+# FastAPI Backend for n8n
+# -----------------------------
+api = FastAPI()
+
+@api.post("/predict")
+async def predict_api(image: UploadFile = File(...)):
     img_bytes = await image.read()
     img = Image.open(io.BytesIO(img_bytes))
 
+    # YOLO prediction
     results = model(img)
 
+    predictions = []
     asymmetry_list = []
 
     for result in results:
@@ -23,21 +34,54 @@ async def predict(image: UploadFile = File(...)):
             width = x2 - x1
             height = y2 - y1
 
-            # calculate asymmetry
             asym = abs(width - height) / max(width, height) * 100 if max(width, height) else 0
             asymmetry_list.append(asym)
 
-    # Overall asymmetry
-    avg_asymmetry = round(sum(asymmetry_list) / len(asymmetry_list), 2) if asymmetry_list else 0
+            predictions.append({
+                "class": result.names[int(box.cls[0])],
+                "confidence": float(box.conf[0]),
+                "bbox": [x1, y1, x2, y2],
+                "asymmetry_percentage": round(asym, 2)
+            })
 
-    # Classification threshold
-    THRESHOLD = 10  # adjust as needed
+    avg_asym = round(sum(asymmetry_list) / len(asymmetry_list), 2) if asymmetry_list else 0
 
-    if avg_asymmetry > THRESHOLD:
-        return "DEFORMED"
-    else:
-        return "NORMAL"
+    return {
+        "predictions": predictions,
+        "count": len(predictions),
+        "average_asymmetry_percentage": avg_asym
+    }
 
-@app.get("/")
-def home():
-    return "YOLO asymmetry API is running!"
+
+# -----------------------------
+# Start FastAPI in Background
+# -----------------------------
+def start_fastapi():
+    uvicorn.run(api, host="0.0.0.0", port=8000)
+
+threading.Thread(target=start_fastapi, daemon=True).start()
+
+
+# -----------------------------
+# STREAMLIT FRONTEND
+# -----------------------------
+st.title("YOLO Asymmetry Detection")
+uploaded_file = st.file_uploader("Upload Image")
+
+if uploaded_file:
+    img = Image.open(uploaded_file)
+    st.image(img, caption="Uploaded Image")
+
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        img.save(tmp.name)
+        results = model(tmp.name)
+
+    st.subheader("Predictions")
+
+    for result in results:
+        for box in result.boxes:
+            st.write({
+                "class": result.names[int(box.cls[0])],
+                "confidence": float(box.conf[0]),
+                "bbox": box.xyxy[0].tolist()
+            })
